@@ -8,6 +8,16 @@ from keras.models import Model
 
 
 def standardize_coords(coords_grid, dim):
+    """
+    standardize_coords - standardizes the coordinates in a mesh grid between -1 and 1 for each
+    dimension.
+
+    :param coords_grid - shape (dim, width, height, ...)
+    :param dim - spatial dimensionality of the data, e.g. 2 for dealing with image data.
+        Should match K.int_shape(coords_grid)[0].
+
+    :returns - the standardized coords, shape (dim, width, height, ...)
+    """
     maxes = [K.max(coords_grid[i]) for i in range(dim)]
     res = K.stack([2.0 * coords_grid[i] / max_val - 1.0 for i,
                    max_val in zip(range(dim), maxes)], axis=0)
@@ -17,13 +27,15 @@ def standardize_coords(coords_grid, dim):
 def affine_transform(coords_grid, params, dim):
     """
     affine_transform represents an affine transformation -
-    translation, rotation, scale and skew
+    translation, rotation, scale and skew. Interprets params as the flat parameters of the
+    transformation matrix, for each sample.
 
     :param coords_grid - grid of target coordinates
         shape: (dim, width, height, ...)
     :param params - parametrization of the affine transform
         shape: (N, dim^2 + dim), dim^2 params for the rotation matrix + dim params
         for the translation component
+
     :returns - transformed coords_grid, to be used for sampling from the input image
         shape: (N, dim, width, height, ...)
     """
@@ -45,11 +57,15 @@ def affine_transform(coords_grid, params, dim):
 def attention_transform(coords_grid, params, dim):
     """
     attention_transform represents an attention transformation -
-    translation and isotropic scaling
+    translation and isotropic scaling. Interprets params as the flat parameters of the
+    transformation matrix, for each sample.
 
     :param coords_grid - grid of target coordinates
-    :param params - parametrization of the attention transform, shape (N, dim + 1)
-       1 param for the isotropic scaling, dim params for the translation component
+        shape: (dim, width, height, ...)
+    :param params - parametrization of the attention transform
+        shape (N, dim + 1), 1 param for the isotropic scaling, dim params for the translation
+        component
+
     :returns - transformed coords_grid, to be used for sampling from the input image
     """
     # standardize, extend to homogenous coordinates
@@ -92,11 +108,18 @@ def bilinear_interpolate(selection_indices, inputs, dim):
 
 
 def interpolate_nearest(selection_indices, inputs, dim):
-    """interpolate_nearest
+    """interpolate_nearest - samples with selection_indices from inputs, interpolating the results
+    via nearest neighbours rounding of the indices (which are not whole numbers yet).
 
-    :param selection_indices - (N, dim, width, height, ...)
-    :param inputs - (N, width, height, .. n_chan)
-    :param dim
+    :param selection_indices
+        shape: (N, dim, width, height, ...)
+    :param inputs
+        shape: (N, width, height, .. n_chan)
+    :param dim - dimensionality of the data, e.g. 2 if inputs is a batch of images
+
+    :returns - the sampled result
+        :shape (N, width, height, ..., n_chan), where width, height, ... come from the
+        selection_indices shape
     """
 
     inputs_shape = K.shape(inputs)
@@ -137,22 +160,24 @@ def interpolate_nearest(selection_indices, inputs, dim):
 
 
 class SpatialTransform(Layer):
+    """
+    SpatialTransformer layer, which can automatically predict the parameters of a spatial
+    transformation that is then applied to the input.
+
+    :param output_shape - desired shape of the output image / volume / ..., without the channels
+        e.g. (width, height) or (width, height, depth) for 3D volumes
+    :param loc_network - neural network that will produce the transformation parameters
+    :param grid_transform_fn - function that interprets the parameters in the output of
+        loc_network as a transformation of image coordinates and applies it
+    :param interpolation_fn - function that samples the image with interpolation
+    :param **kwargs
+    """
 
     def __init__(self, output_grid_shape,
                  loc_network,
                  grid_transform_fn,
                  interpolation_fn,
                  **kwargs):
-        """__init__
-
-        :param output_shape - desired shape of the output image / volume, without the channels
-            e.g. (width, height) or (width, height, depth) for 3D volumes
-        :param loc_network - neural network that will produce the transformation parameters
-        :param grid_transform_fn - function that interprets the parameters in the output of
-            loc_network as a transformation of image coordinates and applies it
-        :param interpolation_fn - function that samples the image with interpolation
-        :param **kwargs
-        """
         self.output_grid_shape = output_grid_shape
         self.loc_network = loc_network
         self.grid_transform_fn = grid_transform_fn
@@ -187,84 +212,3 @@ class SpatialTransform(Layer):
     def compute_output_shape(self, input_shape):
         # add the channels dimension
         return (input_shape[0],) + self.output_grid_shape + (input_shape[-1],)
-
-
-def rot_scale_matrix(angle, scale, trans):
-    import numpy as np
-    rot_mat = np.array([[np.cos(angle), -np.sin(angle)],
-                        [np.sin(angle), np.cos(angle)]],
-                       dtype="float32")
-    scale_mat = np.array([[1/scale, 0.0],
-                          [0.0, 1/scale]],
-                         dtype="float32")
-    mat = np.dot(scale_mat, rot_mat)
-    trans = trans[:, np.newaxis]
-    hom_mat = np.concatenate([mat, trans], axis=1)
-    return np.reshape(hom_mat, [1, -1])
-
-
-def test_affine_transform():
-    import numpy as np
-    from keras.datasets import mnist
-    from keras.layers import Input
-
-    (x_train, _), (_, _) = mnist.load_data()
-
-    samples = x_train[:10, :, :, np.newaxis]
-
-    def loc_network(x):
-        import tensorflow as tf
-        flat_mat = rot_scale_matrix(-1.5, 0.5, np.array([0.3, -0.1]))
-        return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
-
-    inputs = Input(shape=[28, 28, 1])
-    st = SpatialTransform(output_grid_shape=(56, 56),
-                          loc_network=loc_network,
-                          grid_transform_fn=affine_transform,
-                          interpolation_fn=interpolate_nearest)
-    outputs = st(inputs)
-    sess = K.get_session()
-
-    res = sess.run(outputs, feed_dict={inputs: samples})
-
-    return samples, res
-
-
-def test_attention_transform():
-    import numpy as np
-    from keras.datasets import mnist
-    from keras.layers import Input
-
-    (x_train, _), (_, _) = mnist.load_data()
-
-    samples = x_train[:10, :, :, np.newaxis]
-
-    def loc_network(x):
-        import tensorflow as tf
-        flat_mat = np.array([2.0, 0.3, -0.1])
-        flat_mat = flat_mat[np.newaxis, :]
-        return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
-
-    inputs = Input(shape=[28, 28, 1])
-    st = SpatialTransform(output_grid_shape=(56, 56),
-                          loc_network=loc_network,
-                          grid_transform_fn=attention_transform,
-                          interpolation_fn=interpolate_nearest)
-    outputs = st(inputs)
-    sess = K.get_session()
-
-    res = sess.run(outputs, feed_dict={inputs: samples})
-
-    return samples, res
-
-
-if __name__ == "__main__":
-    # original, transformed = test_affine_transform()
-    original, transformed = test_attention_transform()
-    import matplotlib.pyplot as plt
-    plt.figure(1)
-    plt.subplot(211)
-    plt.imshow(original[0, :, :, 0], cmap="gray", interpolation="none")
-    plt.subplot(212)
-    plt.imshow(transformed[0, :, :, 0], cmap="gray", interpolation="none")
-    plt.show()
