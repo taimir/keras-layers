@@ -8,8 +8,8 @@ def rot_scale_matrix(angle, scale, trans):
     rot_mat = np.array([[np.cos(angle), -np.sin(angle)],
                         [np.sin(angle), np.cos(angle)]],
                        dtype="float32")
-    scale_mat = np.array([[1/scale, 0.0],
-                          [0.0, 1/scale]],
+    scale_mat = np.array([[scale, 0.0],
+                          [0.0, scale]],
                          dtype="float32")
     mat = np.dot(scale_mat, rot_mat)
     trans = trans[:, np.newaxis]
@@ -28,14 +28,15 @@ def test_affine_transform():
 
     def loc_network(x):
         import tensorflow as tf
-        flat_mat = rot_scale_matrix(-1.5, 0.5, np.array([0.3, -0.1]))
+        flat_mat = rot_scale_matrix(0, 0.5, np.array([1.25, -0.0]))
         return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
 
     inputs = Input(shape=[28, 28, 1])
-    st = SpatialTransform(output_grid_shape=(56, 56),
+    st = SpatialTransform(output_grid_shape=(10, 10),
                           loc_network=loc_network,
                           grid_transform_fn=affine_transform,
-                          interpolation_fn=interpolate_nearest)
+                          interpolation_fn=interpolate_nearest,
+                          wrap=True)
     outputs = st(inputs)
     sess = K.get_session()
 
@@ -73,8 +74,8 @@ def test_attention_transform():
 
 
 if __name__ == "__main__":
-    # original, transformed = test_affine_transform()
-    original, transformed = test_attention_transform()
+    original, transformed = test_affine_transform()
+    # original, transformed = test_attention_transform()
     import matplotlib.pyplot as plt
     plt.figure(1)
     plt.subplot(211)

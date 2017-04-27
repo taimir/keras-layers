@@ -50,8 +50,7 @@ def affine_transform(coords_grid, params, dim):
     # apply the transformation (keras tensor product uses axis -2 for the second tensor)
     coords_grid = K.permute_dimensions(x=coords_grid, pattern=(1, 0, 2))
     transformed = K.dot(transform_mat, coords_grid)
-    clipped = K.clip(transformed, min_value=-1, max_value=1)
-    return clipped
+    return transformed
 
 
 def attention_transform(coords_grid, params, dim):
@@ -88,8 +87,7 @@ def attention_transform(coords_grid, params, dim):
     # apply the transformation (keras tensor product uses axis -2 for the second tensor)
     coords_grid = K.permute_dimensions(x=coords_grid, pattern=(1, 0, 2))
     transformed = K.dot(transform_mat, coords_grid)
-    clipped = K.clip(transformed, min_value=-1, max_value=1)
-    return clipped
+    return transformed
 
 
 def tps_transform(coords_grid, params):
@@ -103,11 +101,11 @@ def tps_transform(coords_grid, params):
     raise NotImplementedError
 
 
-def bilinear_interpolate(selection_indices, inputs, dim):
+def bilinear_interpolate(selection_indices, inputs, dim, wrap=False):
     raise NotImplementedError
 
 
-def interpolate_nearest(selection_indices, inputs, dim):
+def interpolate_nearest(selection_indices, inputs, dim, wrap=False):
     """interpolate_nearest - samples with selection_indices from inputs, interpolating the results
     via nearest neighbours rounding of the indices (which are not whole numbers yet).
 
@@ -116,6 +114,7 @@ def interpolate_nearest(selection_indices, inputs, dim):
     :param inputs
         shape: (N, width, height, .. n_chan)
     :param dim - dimensionality of the data, e.g. 2 if inputs is a batch of images
+    :param wrap - whether to wrap, or otherwise clip during the interpolation
 
     :returns - the sampled result
         :shape (N, width, height, ..., n_chan), where width, height, ... come from the
@@ -130,8 +129,19 @@ def interpolate_nearest(selection_indices, inputs, dim):
     n_chan = inputs_shape[-1]
 
     maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
-    selection_indices = K.stack([(selection_indices[:, i] + 1.0) *
-                                 max_val / 2.0 for i, max_val in zip(range(dim), maxes)], axis=1)
+
+    if wrap:
+        wrapped_indices = list()
+        for i, max_val in zip(range(dim), maxes):
+            std_indices = (selection_indices[:, i] + 1.0) * max_val / 2.0
+            std_indices = K.cast(K.round(std_indices), dtype="int32")
+            wrapped = std_indices % K.cast(max_val, "int32")
+            wrapped_indices.append(wrapped)
+        selection_indices = K.stack(wrapped_indices, axis=1)
+    else:
+        selection_indices = K.clip(selection_indices, min_value=-1, max_value=1)
+        selection_indices = K.stack([(selection_indices[:, i] + 1.0) *
+                                     max_val / 2.0 for i, max_val in zip(range(dim), maxes)], axis=1)
 
     flat_inputs = K.reshape(inputs, (-1, n_chan))
     selection_indices = K.cast(K.round(selection_indices), dtype="int32")
@@ -170,6 +180,7 @@ class SpatialTransform(Layer):
     :param grid_transform_fn - function that interprets the parameters in the output of
         loc_network as a transformation of image coordinates and applies it
     :param interpolation_fn - function that samples the image with interpolation
+    :param wrap - whether to wrap, or otherwise clip during the interpolation
     :param **kwargs
     """
 
@@ -177,11 +188,13 @@ class SpatialTransform(Layer):
                  loc_network,
                  grid_transform_fn,
                  interpolation_fn,
+                 wrap=False,
                  **kwargs):
         self.output_grid_shape = output_grid_shape
         self.loc_network = loc_network
         self.grid_transform_fn = grid_transform_fn
         self.interpolation_fn = interpolation_fn
+        self.wrap = wrap
 
         # initialize the coords grid
         indices = np.indices(self.output_grid_shape, dtype="float32")
@@ -206,7 +219,7 @@ class SpatialTransform(Layer):
         transformed_coords = self.grid_transform_fn(coords_grid=self.coords_grid,
                                                     params=params,
                                                     dim=dim)
-        transformed_image = self.interpolation_fn(transformed_coords, x, dim=dim)
+        transformed_image = self.interpolation_fn(transformed_coords, x, dim=dim, wrap=self.wrap)
         return transformed_image
 
     def compute_output_shape(self, input_shape):
