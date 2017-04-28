@@ -155,10 +155,11 @@ def interpolate_nearest(selection_indices, inputs, dim, wrap=False):
     # add the offsets for each sample in the minibatch
     if K.backend() == "tensorflow":
         import tensorflow as tf
-        offsets = tf.range(n) * indices_per_sample
+        offsets = tf.range(n) * K.prod(inputs_shape[1:-1])
     else:
         import theano.tensor as T
-        offsets = T.arange(n) * indices_per_sample
+        offsets = T.arange(n) * K.prod(inputs_shape[1:-1])
+
     offsets = K.reshape(offsets, (-1, 1))
     offsets = K.tile(offsets, (1, indices_per_sample))
     offsets = K.flatten(offsets)
