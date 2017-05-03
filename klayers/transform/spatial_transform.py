@@ -101,56 +101,66 @@ def tps_transform(coords_grid, params):
     raise NotImplementedError
 
 
-def bilinear_interpolate(selection_indices, inputs, dim, wrap=False):
-    raise NotImplementedError
+def bitfield(n):
+    # http://stackoverflow.com/questions/10321978/integer-to-bitfield-as-a-list
+    # a bit faster than int() conversion
+    return [1 if digit == '1' else 0 for digit in bin(n)[2:]]
 
 
-def interpolate_nearest(selection_indices, inputs, dim, wrap=False):
-    """interpolate_nearest - samples with selection_indices from inputs, interpolating the results
-    via nearest neighbours rounding of the indices (which are not whole numbers yet).
+def upscale(coords, maxes):
+    coords = K.stack([(coords[:, i] + 1.0) *
+                      max_val / 2.0 for i, max_val in enumerate(maxes)], axis=1)
+    return coords
 
-    :param selection_indices
-        shape: (N, dim, width, height, ...)
-    :param inputs
-        shape: (N, width, height, .. n_chan)
-    :param dim - dimensionality of the data, e.g. 2 if inputs is a batch of images
-    :param wrap - whether to wrap, or otherwise clip during the interpolation
 
-    :returns - the sampled result
-        :shape (N, width, height, ..., n_chan), where width, height, ... come from the
-        selection_indices shape
-    """
+def clip(coords, maxes):
+    if K.backend() == "tensorflow":
+        import tensorflow as tf
+        coords = K.stack([tf.clip_by_value(coords[:, i], 0, max_val)
+                          for i, max_val in enumerate(maxes)], axis=1)
+    else:
+        import theano.tensor as T
+        coords = K.stack([T.clip(coords[:, i], 0, max_val)
+                          for i, max_val in enumerate(maxes)], axis=1)
+
+    coords = K.cast(coords, dtype="int32")
+    return coords
+
+
+def wrap(coords, maxes):
+    wrapped_indices = list()
+    for i, max_val in enumerate(maxes):
+        coords_i = K.cast(coords[:, i], dtype="int32")
+        wrapped = coords_i % K.cast(max_val, "int32")
+        wrapped_indices.append(wrapped)
+
+    coords = K.stack(wrapped_indices, axis=1)
+
+    return coords
+
+
+def sample(inputs, coords, dim, wrapped):
 
     inputs_shape = K.shape(inputs)
-    indices_shape = K.shape(selection_indices)
-    outputs_shape = K.concatenate([inputs_shape[0:1], indices_shape[2:], inputs_shape[-1:]])
+    coords_shape = K.shape(coords)
+    outputs_shape = K.concatenate([inputs_shape[0:1], coords_shape[2:], inputs_shape[-1:]])
+
+    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
+    if wrapped:
+        coords = wrap(coords, maxes)
+    else:
+        coords = clip(coords, maxes)
 
     n = inputs_shape[0]
     n_chan = inputs_shape[-1]
 
-    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
-
-    if wrap:
-        wrapped_indices = list()
-        for i, max_val in zip(range(dim), maxes):
-            std_indices = (selection_indices[:, i] + 1.0) * max_val / 2.0
-            std_indices = K.cast(K.round(std_indices), dtype="int32")
-            wrapped = std_indices % K.cast(max_val, "int32")
-            wrapped_indices.append(wrapped)
-        selection_indices = K.stack(wrapped_indices, axis=1)
-    else:
-        selection_indices = K.clip(selection_indices, min_value=-1, max_value=1)
-        selection_indices = K.stack([(selection_indices[:, i] + 1.0) *
-                                     max_val / 2.0 for i, max_val in zip(range(dim), maxes)], axis=1)
-
     flat_inputs = K.reshape(inputs, (-1, n_chan))
-    selection_indices = K.cast(K.round(selection_indices), dtype="int32")
 
-    flat_indices = K.flatten(selection_indices[:, -1])
+    flat_coords = K.flatten(coords[:, -1])
     for i in reversed(range(dim - 1)):
-        flat_indices += K.prod(inputs_shape[1:i + 2]) * K.flatten(selection_indices[:, i])
+        flat_coords += K.prod(inputs_shape[1:i + 2]) * K.flatten(coords[:, i])
 
-    indices_per_sample = K.prod(indices_shape[2:])
+    coords_per_sample = K.prod(coords_shape[2:])
 
     # add the offsets for each sample in the minibatch
     if K.backend() == "tensorflow":
@@ -161,13 +171,108 @@ def interpolate_nearest(selection_indices, inputs, dim, wrap=False):
         offsets = T.arange(n) * K.prod(inputs_shape[1:-1])
 
     offsets = K.reshape(offsets, (-1, 1))
-    offsets = K.tile(offsets, (1, indices_per_sample))
+    offsets = K.tile(offsets, (1, coords_per_sample))
     offsets = K.flatten(offsets)
-    flat_indices += offsets
+    flat_coords += offsets
 
-    outputs = K.gather(flat_inputs, flat_indices)
+    outputs = K.gather(flat_inputs, flat_coords)
     outputs = K.reshape(outputs, outputs_shape)
     return outputs
+
+
+def interpolate_bilinear(coords, inputs, dim, wrap=False):
+    """
+    interpolate_bilinear - the default interpolation kernel to be used with the spatial
+    transformer. Differential w.r.t. both the indices and the input tensors to be sampled.
+
+    :param coords
+        shape: (N, dim, width, height, ...)
+    :param inputs
+        shape: (N, width, height, .. n_chan)
+    :param dim - dimensionality of the data, e.g. 2 if inputs is a batch of images
+    :param wrap - whether to wrap, or otherwise clip during the interpolation
+
+    :returns - the sampled result
+        :shape (N, width, height, ..., n_chan), where width, height, ... come from the
+        coords shape
+    """
+
+    coords_float = coords
+
+    inputs_shape = K.shape(inputs)
+    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
+    coords = upscale(coords, maxes)
+
+    # floored coordinates, time to build the surrounding points based on them
+    if K.backend() == "tensorflow":
+        import tensorflow as tf
+        coords = tf.floor(coords)
+    else:
+        import theano.tensor as T
+        coords = T.floor(coords)
+
+    # construct the surrounding 2^dim coord sets which will all be used for interpolation
+    # (e.g. corresponding to the 4 points in 2D that surround the point to be interpolated,
+    # or to the 8 points in 3D, etc ...)
+    surround_coord_sets = []
+    for i in range(2 ** dim):
+        offsets = K.variable(np.array(bitfield(i)))
+        offsets = K.reshape(offsets, shape=[1, -1] + [1] * dim)
+        surround_coord_set = coords + offsets
+        surround_coord_sets.append(surround_coord_set)
+
+    # sample for each of the surrounding points before interpolating
+    surround_inputs = []
+    for coords_set in surround_coord_sets:
+        surround_input = sample(inputs, coords_set, dim, wrapped=wrap)
+        surround_inputs.append(surround_input)
+
+    # Bilinear interpolation, this part of the kernel lets the gradients flow through the
+    # coords as well as the inputs
+    products = list()
+    for coords_set, surround_input in zip(surround_coord_sets, surround_inputs):
+        if K.backend() == "tensorflow":
+            import tensorflow as tf
+            # shape N, width, height, ...
+            product = tf.reduce_prod(1 - tf.abs(coords_set - coords_float), axis=1)
+        else:
+            import theano.tensor as T
+            product = T.prod(1 - T.abs(coords_set - coords_float), axis=1)
+
+        # shape: (N, width, height, ..., n_channels)
+        product = surround_input * K.expand_dims(product, -1)
+        products.append(product)
+
+    return sum(products)
+
+
+def interpolate_nearest(coords, inputs, dim, wrap=False):
+    """
+    CAUTION: This interpolation kernel is not differentiable. Use only if you do not need
+    gradients flowing back throught he localization network.
+
+    interpolate_nearest - samples with coords from inputs, interpolating the results
+    via nearest neighbours rounding of the indices (which are not whole numbers yet).
+
+    :param coords
+        shape: (N, dim, width, height, ...)
+    :param inputs
+        shape: (N, width, height, .. n_chan)
+    :param dim - dimensionality of the data, e.g. 2 if inputs is a batch of images
+    :param wrap - whether to wrap, or otherwise clip during the interpolation
+
+    :returns - the sampled result
+        :shape (N, width, height, ..., n_chan), where width, height, ... come from the
+        coords shape
+    """
+    inputs_shape = K.shape(inputs)
+
+    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
+
+    coords = upscale(coords, maxes)
+    coords = K.round(coords)
+
+    return sample(inputs, coords, dim, wrapped=wrap)
 
 
 class SpatialTransform(Layer):
@@ -188,7 +293,7 @@ class SpatialTransform(Layer):
     def __init__(self, output_grid_shape,
                  loc_network,
                  grid_transform_fn,
-                 interpolation_fn,
+                 interpolation_fn=interpolate_bilinear,
                  wrap=False,
                  **kwargs):
         self.output_grid_shape = output_grid_shape

@@ -1,5 +1,5 @@
 import keras.backend as K
-from klayers.transform import affine_transform, attention_transform, interpolate_nearest
+from klayers.transform import affine_transform, attention_transform
 from klayers.transform import SpatialTransform
 
 
@@ -28,15 +28,14 @@ def test_affine_transform():
 
     def loc_network(x):
         import tensorflow as tf
-        flat_mat = rot_scale_matrix(0, 1.0, np.array([0.3, -0.0]))
+        flat_mat = rot_scale_matrix(0, 1.0, np.array([1.2, -0.0]))
         return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
 
     inputs = Input(shape=[28, 28, 1])
-    st = SpatialTransform(output_grid_shape=(14, 14),
+    st = SpatialTransform(output_grid_shape=(56, 56),
                           loc_network=loc_network,
                           grid_transform_fn=affine_transform,
-                          interpolation_fn=interpolate_nearest,
-                          wrap=False)
+                          wrap=True)
     outputs = st(inputs)
     sess = K.get_session()
 
@@ -63,8 +62,7 @@ def test_attention_transform():
     inputs = Input(shape=[28, 28, 1])
     st = SpatialTransform(output_grid_shape=(56, 56),
                           loc_network=loc_network,
-                          grid_transform_fn=attention_transform,
-                          interpolation_fn=interpolate_nearest)
+                          grid_transform_fn=attention_transform)
     outputs = st(inputs)
     sess = K.get_session()
 
@@ -77,7 +75,7 @@ if __name__ == "__main__":
     original, transformed = test_affine_transform()
     # original, transformed = test_attention_transform()
     import matplotlib.pyplot as plt
-    for i in range(10):
+    for i in range(3):
         plt.figure(1)
         plt.subplot(211)
         plt.imshow(original[i, :, :, 0], cmap="gray", interpolation="none")
