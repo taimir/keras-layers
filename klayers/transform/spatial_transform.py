@@ -285,7 +285,8 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
     # or to the 8 points in 3D, etc ...)
     surround_coord_sets = []
     for i in range(2 ** dim):
-        offsets = K.variable(np.array(bitfield(i)))
+        offsets = K.variable(np.array(bitfield(i)),
+                             name="spatial_transform/bilinear_surround_offsets")
         offsets = K.reshape(offsets, shape=[1, -1] + [1] * dim)
         surround_coord_set = coords + offsets
         surround_coord_sets.append(surround_coord_set)
@@ -372,7 +373,7 @@ class SpatialTransform(Layer):
 
         # initialize the coords grid
         indices = np.indices(self.output_grid_shape, dtype="float32")
-        self.coords_grid = K.variable(indices, name="grid_indices")
+        self.coords_grid = K.variable(indices, name="spatial_transform/grid_indices")
         super(SpatialTransform, self).__init__(**kwargs)
 
     def build(self, input_shape):
