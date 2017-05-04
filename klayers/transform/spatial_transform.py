@@ -266,26 +266,27 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
         coords shape
     """
 
-    coords_float = coords
 
     inputs_shape = K.shape(inputs)
     maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
-    coords = upscale(coords, maxes, dim)
+    coords_float = upscale(coords, maxes, dim)
 
     # floored coordinates, time to build the surrounding points based on them
     if K.backend() == "tensorflow":
         import tensorflow as tf
-        coords = tf.floor(coords)
+        coords = tf.floor(coords_float)
     else:
         import theano.tensor as T
-        coords = T.floor(coords)
+        coords = T.floor(coords_float)
 
     # construct the surrounding 2^dim coord sets which will all be used for interpolation
     # (e.g. corresponding to the 4 points in 2D that surround the point to be interpolated,
     # or to the 8 points in 3D, etc ...)
     surround_coord_sets = []
     for i in range(2 ** dim):
-        offsets = K.variable(np.array(bitfield(i)),
+        bits = bitfield(i)
+        bits = [0] * (dim - len(bits)) + bits
+        offsets = K.variable(np.array(bits),
                              name="spatial_transform/bilinear_surround_offsets")
         offsets = K.reshape(offsets, shape=[1, -1] + [1] * dim)
         surround_coord_set = coords + offsets

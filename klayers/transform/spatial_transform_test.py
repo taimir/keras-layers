@@ -28,11 +28,11 @@ def test_affine_transform():
 
     def loc_network(x):
         import tensorflow as tf
-        flat_mat = rot_scale_matrix(0, 1.0, np.array([1.2, -0.0]))
+        flat_mat = rot_scale_matrix(0, 1.0, np.array([0.0, -0.0]))
         return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
 
     inputs = Input(shape=[28, 28, 1])
-    st = SpatialTransform(output_grid_shape=(56, 56),
+    st = SpatialTransform(output_grid_shape=(44, 44),
                           loc_network=loc_network,
                           grid_transform_fn=affine_transform,
                           wrap=True)
