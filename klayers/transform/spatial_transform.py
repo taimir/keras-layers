@@ -7,7 +7,7 @@ from keras.layers import Layer
 from keras.models import Model
 
 
-def standardize_coords(coords_grid, dim):
+def standardize_coords(coords, maxes, dim):
     """
     standardize_coords - standardizes the coordinates in a mesh grid between -1 and 1 for each
     dimension.
@@ -18,9 +18,8 @@ def standardize_coords(coords_grid, dim):
 
     :returns - the standardized coords, shape (dim, width, height, ...)
     """
-    maxes = [K.max(coords_grid[i]) for i in range(dim)]
-    res = K.stack([2.0 * coords_grid[i] / max_val - 1.0 for i,
-                   max_val in zip(range(dim), maxes)], axis=0)
+    maxes = K.cast(K.reshape(maxes, shape=[-1] + [1] * dim), "float32")
+    res = 2.0 * coords / maxes - 1.0
     return res
 
 
@@ -40,7 +39,8 @@ def affine_transform(coords_grid, params, dim):
         shape: (N, dim, width, height, ...)
     """
     # standardize, extend to homogenous coordinates
-    coords_grid = standardize_coords(coords_grid, dim)
+    maxes = K.shape(coords_grid)[1:] - 1
+    coords_grid = standardize_coords(coords_grid, maxes, dim)
     ones_pad = K.expand_dims(K.ones_like(coords_grid[0]), axis=0)
     coords_grid = K.concatenate([coords_grid, ones_pad], axis=0)
 
@@ -68,7 +68,8 @@ def attention_transform(coords_grid, params, dim):
     :returns - transformed coords_grid, to be used for sampling from the input image
     """
     # standardize, extend to homogenous coordinates
-    coords_grid = standardize_coords(coords_grid, dim)
+    maxes = K.shape(coords_grid)[1:] - 1
+    coords_grid = standardize_coords(coords_grid, maxes, dim)
     ones_pad = K.expand_dims(K.ones_like(coords_grid[0]), axis=0)
     coords_grid = K.concatenate([coords_grid, ones_pad], axis=0)
 
@@ -102,54 +103,93 @@ def tps_transform(coords_grid, params):
 
 
 def bitfield(n):
+    """
+    bitfield - create list of binary 0 or 1 for the binary representation of n
+
+    :param n: an integer number
+    """
     # http://stackoverflow.com/questions/10321978/integer-to-bitfield-as-a-list
     # a bit faster than int() conversion
     return [1 if digit == '1' else 0 for digit in bin(n)[2:]]
 
 
-def upscale(coords, maxes):
-    coords = K.stack([(coords[:, i] + 1.0) *
-                      max_val / 2.0 for i, max_val in enumerate(maxes)], axis=1)
+def upscale(coords, maxes, dim):
+    """
+    upscale - unstandardizes the given set of coordinates from [-1, 1] to [0, maxes]. If there
+    are coordinates out of bounds, they are still upscaled and not clipped or wrapped in this
+    function.
+
+    :param coords: the indices to sample with
+        shape: (N, dim, width, height, ...)
+    :param maxes: array of maximum values for each spatial dimension
+        shape: (dim,)
+    :param dim: dimensionality of the data, e.g. 2 for 2D images
+    """
+    maxes = K.reshape(maxes, [-1] + [1] * dim)
+    coords = (coords + 1.0) * maxes / 2.0
     return coords
 
 
-def clip(coords, maxes):
+def clip(coords, maxes, dim):
+    """
+    clip - clips the given set of coordinates so that they are within maxes range
+
+    :param coords: the indices to sample with
+        shape: (N, dim, width, height, ...)
+    :param maxes: array of maximum values for each spatial dimension
+        shape: (dim,)
+    :param dim: dimensionality of the data, e.g. 2 for 2D images
+    """
     if K.backend() == "tensorflow":
         import tensorflow as tf
-        coords = K.stack([tf.clip_by_value(coords[:, i], 0, max_val)
-                          for i, max_val in enumerate(maxes)], axis=1)
+        coords = K.stack([tf.clip_by_value(coords[:, i], 0, maxes[i])
+                          for i in range(dim)], axis=1)
     else:
         import theano.tensor as T
-        coords = K.stack([T.clip(coords[:, i], 0, max_val)
-                          for i, max_val in enumerate(maxes)], axis=1)
+        coords = K.stack([T.clip(coords[:, i], 0, maxes[i])
+                          for i in range(dim)], axis=1)
 
     coords = K.cast(coords, dtype="int32")
     return coords
 
 
-def wrap(coords, maxes):
-    wrapped_indices = list()
-    for i, max_val in enumerate(maxes):
-        coords_i = K.cast(coords[:, i], dtype="int32")
-        wrapped = coords_i % K.cast(max_val, "int32")
-        wrapped_indices.append(wrapped)
+def wrap(coords, maxes, dim):
+    """
+    wrap - wraps the given set of coordinates so that they are within maxes range.
 
-    coords = K.stack(wrapped_indices, axis=1)
-
+    :param coords: the indices to sample with
+        shape: (N, dim, width, height, ...)
+    :param maxes: array of maximum values for each spatial dimension
+        shape: (dim,)
+    :param dim: dimensionality of the data, e.g. 2 for 2D images
+    """
+    maxes = K.cast(K.reshape(maxes, [-1] + [1] * dim), dtype="int32")
+    coords = K.cast(coords, dtype="int32")
+    coords %= maxes
     return coords
 
 
 def sample(inputs, coords, dim, wrapped):
+    """
+    sample - samples from the inputs tensor using coords as indices.
+
+    :param inputs: the tensor to sample from
+        shape: (N, width, height, ..., n_chan)
+    :param coords: the indices to sample with
+        shape: (N, dim, width, height, ...)
+    :param dim: dimensionality of the data, e.g. 2 for 2D images
+    :param wrapped: whether to wrap out of bound indices or to clip them
+    """
 
     inputs_shape = K.shape(inputs)
     coords_shape = K.shape(coords)
     outputs_shape = K.concatenate([inputs_shape[0:1], coords_shape[2:], inputs_shape[-1:]])
 
-    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
+    maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
     if wrapped:
-        coords = wrap(coords, maxes)
+        coords = wrap(coords, maxes, dim)
     else:
-        coords = clip(coords, maxes)
+        coords = clip(coords, maxes, dim)
 
     n = inputs_shape[0]
     n_chan = inputs_shape[-1]
@@ -200,8 +240,8 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
     coords_float = coords
 
     inputs_shape = K.shape(inputs)
-    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
-    coords = upscale(coords, maxes)
+    maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
+    coords = upscale(coords, maxes, dim)
 
     # floored coordinates, time to build the surrounding points based on them
     if K.backend() == "tensorflow":
@@ -266,10 +306,9 @@ def interpolate_nearest(coords, inputs, dim, wrap=False):
         coords shape
     """
     inputs_shape = K.shape(inputs)
+    maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
 
-    maxes = [K.cast(inputs_shape[i + 1] - 1, "float32") for i in range(dim)]
-
-    coords = upscale(coords, maxes)
+    coords = upscale(coords, maxes, dim)
     coords = K.round(coords)
 
     return sample(inputs, coords, dim, wrapped=wrap)
