@@ -169,6 +169,32 @@ def wrap(coords, maxes, dim):
     return coords
 
 
+def sample_tf(inputs, coords, dim):
+    """
+    sample_tf - more efficient sampling for tensorflow
+
+    :param inputs:
+    :param coords:
+    :param dim:
+    :param wrapped:
+    """
+    import tensorflow as tf
+    # form coords in a way so that we can gather_nd with them
+    # For this, I need to add an additional indexing dimension, which will just be
+    coords = tf.transpose(coords, [0] + [i for i in range(2, 2 + dim)] + [1])
+    # coords.shape == [N, width, height, ..., dim]
+    N = tf.shape(coords)[0]
+    inner_shape = tf.shape(coords)[1:-1]
+    batch_indices = tf.range(N)
+    batch_indices = tf.reshape(batch_indices, [-1] + [1] * dim + [1])
+    batch_indices = tf.tile(batch_indices, [1] + [inner_shape[i] for i in range(dim)] + [1])
+    coords = tf.concat([batch_indices, coords], axis=-1)
+    # coords.shape == [N, width, height, ..., 1 + dim]
+    # inputs.shape == [N, width, height, ..., n_chan]
+    output = tf.gather_nd(inputs, coords)
+    return output
+
+
 def sample(inputs, coords, dim, wrapped):
     """
     sample - samples from the inputs tensor using coords as indices.
@@ -190,6 +216,9 @@ def sample(inputs, coords, dim, wrapped):
         coords = wrap(coords, maxes, dim)
     else:
         coords = clip(coords, maxes, dim)
+
+    if K.backend() == "tensorflow":
+        return sample_tf(inputs, coords, dim)
 
     n = inputs_shape[0]
     n_chan = inputs_shape[-1]
