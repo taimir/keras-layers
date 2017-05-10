@@ -266,7 +266,6 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
         coords shape
     """
 
-
     inputs_shape = K.shape(inputs)
     maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
     coords_float = upscale(coords, maxes, dim)
@@ -315,6 +314,85 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
         products.append(product)
 
     return sum(products)
+
+
+def interpolate_gaussian(coords, inputs, dim, wrap=False, stddev=2.0):
+    """
+    interpolate_gaussian - samples with coords from inputs, interpolating the results via a
+    differentiable gaussian kernel.
+
+    :param coords
+        shape: (N, dim, width, height, ...)
+    :param inputs
+        shape: (N, width, height, .. n_chan)
+    :param dim - dimensionality of the data, e.g. 2 if inputs is a batch of images
+    :param wrap - whether to wrap, or otherwise clip during the interpolation
+
+    :returns - the sampled result
+        :shape (N, width, height, ..., n_chan), where width, height, ... come from the
+        coords shape
+    """
+    if not wrap:
+        print("Clipping is not supported for the gaussian kernel yet")
+        raise NotImplementedError
+
+    if K.backend() != "tensorflow":
+        print("Theano backend is currently not supported for the gaussian kernel")
+        raise NotImplementedError
+
+    inputs_shape = K.shape(inputs)
+    inputs_shape_list = [inputs_shape[i] for i in range(dim + 2)]
+
+    coords_shape = K.shape(coords)
+    coords_shape_list = [coords_shape[i] for i in range(dim + 2)]
+
+    inputs_dims = inputs_shape_list[1:-1]
+
+    maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
+    coords_float = upscale(coords, maxes, dim)
+
+    import tensorflow as tf
+    from tensorflow.contrib.distributions import Normal
+
+    # tile the float coords, extending them for the application of the gaussian aggregation later
+    extended_coords = tf.reshape(coords_float, coords_shape_list + [1] * dim)
+    extended_coords = tf.tile(extended_coords, [1] * len(coords_shape_list) + inputs_dims)
+
+    # center a gaussian at each of the unstandardized transformed coordinates
+    coord_gaussians = Normal(loc=extended_coords, scale=stddev)
+
+    # shape: (N, dim, width, height, ..., img_width, img_height, ...)
+    for i in range(dim):
+        # create ranges for each of the dimensions to "spread" the coords across the image
+        range_offset = tf.cast(tf.range(inputs_dims[i]), "float32")
+        range_offset -= tf.cast(inputs_dims[i] / 2, "float32")
+        # reshape so that the offset is broadcastet in all dimensions but the
+        # one for the current dimension
+        broadcast_shape = [1] * len(coords_shape_list) + i * [1] + \
+            [inputs_dims[i]] + (dim - i - 1) * [1]
+        # shape: (1, 1, 1, 1, ..., img_width, img_height, ...)
+        range_offset = tf.reshape(range_offset,  broadcast_shape)
+        range_offset = tf.cast(range_offset, "float32")
+        extended_coords += range_offset
+
+    # now round and then sample
+    sampling_coords = tf.floor(extended_coords)
+
+    # double the dim as those coords are extended
+    samples = sample(inputs, sampling_coords, dim=dim * 2, wrapped=True)
+
+    # since the gaussians are isotropic, I have to reduce a product along the dim-dimension first
+    coord_gaussian_pdfs = coord_gaussians.prob(sampling_coords)
+    coord_gaussian_pdfs = tf.reduce_prod(coord_gaussian_pdfs, axis=1)
+
+    # expand one broadcastable dimension for the image channels
+    coord_gaussian_pdfs = tf.expand_dims(coord_gaussian_pdfs, -1)
+
+    samples = samples * coord_gaussian_pdfs
+    # reduce_sum along the img_width, img_height, ... etc. axes
+    samples = tf.reduce_sum(samples, reduction_indices=[i for i in range(dim + 1, 2 * dim + 1)])
+
+    return samples
 
 
 def interpolate_nearest(coords, inputs, dim, wrap=False):
