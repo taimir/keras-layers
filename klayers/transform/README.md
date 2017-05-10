@@ -6,8 +6,9 @@
 		* affine transformation function
 		* attention transformation function
 		* nearest neighbour interpolation
+		* bilinear interpolation
+		* gaussian interpolation (with adjustable kernel size (cut-off) and kernel step (resolution of the sampling)
 	* TODO:
 		* thin plate spline transformation function
-		* bilinear interpolation
 
 * TODO: augmentation layers
