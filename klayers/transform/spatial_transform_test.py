@@ -1,5 +1,5 @@
 import keras.backend as K
-from klayers.transform import affine_transform, attention_transform
+from klayers.transform import affine_transform, attention_transform, interpolate_gaussian
 from klayers.transform import SpatialTransform
 
 
@@ -31,10 +31,15 @@ def test_affine_transform():
         flat_mat = rot_scale_matrix(0, 1.0, np.array([2.7, -0.0]))
         return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
 
+    def interpolate_fn(coords, inputs, dim, wrap):
+        return interpolate_gaussian(coords, inputs, dim, wrap=wrap,
+                                    kernel_size=5, stddev=1.0)
+
     inputs = Input(shape=[28, 28, 1])
     st = SpatialTransform(output_grid_shape=(44, 44),
                           loc_network=loc_network,
                           grid_transform_fn=affine_transform,
+                          interpolation_fn=interpolate_fn,
                           wrap=True)
     outputs = st(inputs)
     sess = K.get_session()

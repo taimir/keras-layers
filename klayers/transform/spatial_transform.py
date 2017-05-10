@@ -316,7 +316,7 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
     return sum(products)
 
 
-def interpolate_gaussian(coords, inputs, dim, wrap=False, stddev=2.0):
+def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, stddev=2.0):
     """
     interpolate_gaussian - samples with coords from inputs, interpolating the results via a
     differentiable gaussian kernel.
@@ -356,7 +356,11 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, stddev=2.0):
 
     # tile the float coords, extending them for the application of the gaussian aggregation later
     extended_coords = tf.reshape(coords_float, coords_shape_list + [1] * dim)
-    extended_coords = tf.tile(extended_coords, [1] * len(coords_shape_list) + inputs_dims)
+    if kernel_size:
+        extended_coords = tf.tile(
+            extended_coords, [1] * len(coords_shape_list) + [kernel_size] * dim)
+    else:
+        extended_coords = tf.tile(extended_coords, [1] * len(coords_shape_list) + inputs_dims)
 
     # center a gaussian at each of the unstandardized transformed coordinates
     coord_gaussians = Normal(loc=extended_coords, scale=stddev)
@@ -364,12 +368,13 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, stddev=2.0):
     # shape: (N, dim, width, height, ..., img_width, img_height, ...)
     for i in range(dim):
         # create ranges for each of the dimensions to "spread" the coords across the image
-        range_offset = tf.cast(tf.range(inputs_dims[i]), "float32")
-        range_offset -= tf.cast(inputs_dims[i] / 2, "float32")
+        m = kernel_size if kernel_size else inputs_dims[i]
+        range_offset = tf.cast(tf.range(m), "float32")
+        range_offset -= tf.cast(m / 2, "float32")
         # reshape so that the offset is broadcastet in all dimensions but the
         # one for the current dimension
         broadcast_shape = [1] * len(coords_shape_list) + i * [1] + \
-            [inputs_dims[i]] + (dim - i - 1) * [1]
+            [m] + (dim - i - 1) * [1]
         # shape: (1, 1, 1, 1, ..., img_width, img_height, ...)
         range_offset = tf.reshape(range_offset,  broadcast_shape)
         range_offset = tf.cast(range_offset, "float32")
