@@ -361,7 +361,7 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
     # tile the float coords, extending them for the application of the gaussian aggregation later
     extended_coords = tf.reshape(coords_float, coords_shape_list + [1] * dim)
     if kernel_size:
-        m = kernel_size // kernel_step + 1
+        m = kernel_size // kernel_step + (1 if kernel_size % kernel_step != 0 else 0)
         extended_coords = tf.tile(
             extended_coords, [1] * len(coords_shape_list) + [m] * dim)
     else:
@@ -373,10 +373,15 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
     # shape: (N, dim, width, height, ..., img_width, img_height, ...)
     for i in range(dim):
         # create ranges for each of the dimensions to "spread" the coords across the image
-        m = kernel_size // kernel_step + 1 if kernel_size else inputs_dims[i]
-        limit = kernel_size + 1 if kernel_size else inputs_dims[i]
+        if kernel_size:
+            m = kernel_size // kernel_step + (1 if kernel_size % kernel_step != 0 else 0)
+            limit = kernel_size
+        else:
+            m = inputs_dims[i]
+            limit = inputs_dims[i]
+
         range_offset = tf.cast(tf.range(start=0, limit=limit, delta=kernel_step), "float32")
-        range_offset -= tf.cast(limit / 2.0, "float32")
+        range_offset -= tf.cast((limit - 1.0) / 2.0, "float32")
         # reshape so that the offset is broadcastet in all dimensions but the
         # one for the current dimension
         broadcast_shape = [1] * len(coords_shape_list) + i * [1] + \
@@ -396,7 +401,7 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
     samples = sample(inputs, sampling_coords, dim=dim * 2, wrapped=True)
 
     # since the gaussians are isotropic, I have to reduce a product along the dim-dimension first
-    coord_gaussian_pdfs = coord_gaussians.prob(sampling_coords)
+    coord_gaussian_pdfs = coord_gaussians.prob(extended_coords)
     coord_gaussian_pdfs = tf.reduce_prod(coord_gaussian_pdfs, axis=1)
 
     # expand one broadcastable dimension for the image channels
