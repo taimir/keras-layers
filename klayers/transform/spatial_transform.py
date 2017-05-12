@@ -390,7 +390,7 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
         range_offset = tf.reshape(range_offset,  broadcast_shape)
         zero_pads = [tf.zeros_like(range_offset) for _ in range(dim - 1)]
         # concatenate zeros for the rest of the dimensions
-        range_offset = tf.concat(zero_pads[:i] + [range_offset] + zero_pads[i+1:], axis=1)
+        range_offset = tf.concat(zero_pads[:i] + [range_offset] + zero_pads[i + 1:], axis=1)
         range_offset = tf.cast(range_offset, "float32")
         extended_coords += range_offset
 
@@ -406,10 +406,16 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
 
     # expand one broadcastable dimension for the image channels
     coord_gaussian_pdfs = tf.expand_dims(coord_gaussian_pdfs, -1)
-
     samples = samples * coord_gaussian_pdfs
+
+    # normalize the samples so that the weighting does not change the pixel intensities
+    reduction_indices = [i for i in range(dim + 1, 2 * dim + 1)]
+    norm_coeff = tf.reduce_sum(coord_gaussian_pdfs, keep_dims=True,
+                               reduction_indices=reduction_indices)
+    samples /= norm_coeff
+
     # reduce_sum along the img_width, img_height, ... etc. axes
-    samples = tf.reduce_sum(samples, reduction_indices=[i for i in range(dim + 1, 2 * dim + 1)])
+    samples = tf.reduce_sum(samples, reduction_indices=reduction_indices)
 
     return samples
 

@@ -33,7 +33,7 @@ def test_affine_transform():
 
     def interpolate_fn(coords, inputs, dim, wrap):
         return interpolate_gaussian(coords, inputs, dim, wrap=wrap,
-                                    kernel_size=3, kernel_step=2, stddev=.2)
+                                    kernel_size=1, kernel_step=1, stddev=4.0)
 
     inputs = Input(shape=[28, 28, 1])
     st = SpatialTransform(output_grid_shape=(44, 44),
