@@ -28,12 +28,12 @@ def test_affine_transform():
 
     def loc_network(x):
         import tensorflow as tf
-        flat_mat = rot_scale_matrix(0, 1.0, np.array([2.7, -0.0]))
+        flat_mat = rot_scale_matrix(0.4, 2.0, np.array([-0.6, +0.1]))
         return tf.convert_to_tensor(np.tile(flat_mat, [10, 1]), dtype="float32")
 
     def interpolate_fn(coords, inputs, dim, wrap):
         return interpolate_gaussian(coords, inputs, dim, wrap=wrap,
-                                    kernel_size=28, kernel_step=2, stddev=3.0)
+                                    kernel_size=2, kernel_step=1, stddev=4.0)
 
     inputs = Input(shape=[28, 28, 1])
     st = SpatialTransform(output_grid_shape=(44, 44),

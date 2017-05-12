@@ -383,6 +383,9 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
             [m] + (dim - i - 1) * [1]
         # shape: (1, 1, 1, 1, ..., img_width, img_height, ...)
         range_offset = tf.reshape(range_offset,  broadcast_shape)
+        zero_pads = [tf.zeros_like(range_offset) for _ in range(dim - 1)]
+        # concatenate zeros for the rest of the dimensions
+        range_offset = tf.concat(zero_pads[:i] + [range_offset] + zero_pads[i+1:], axis=1)
         range_offset = tf.cast(range_offset, "float32")
         extended_coords += range_offset
 
