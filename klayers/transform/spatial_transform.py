@@ -48,7 +48,8 @@ def affine_transform(coords_grid, params, dim):
     transform_mat = K.reshape(x=params, shape=(-1, dim, dim + 1))
 
     # apply the transformation (keras tensor product uses axis -2 for the second tensor)
-    coords_grid = K.permute_dimensions(x=coords_grid, pattern=(1, 0, 2))
+    permutation = tuple(range(1, dim)) + (0, dim)
+    coords_grid = K.permute_dimensions(x=coords_grid, pattern=permutation)
     transformed = K.dot(transform_mat, coords_grid)
     return transformed
 
