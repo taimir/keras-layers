@@ -174,10 +174,10 @@ def sample_tf(inputs, coords, dim):
     """
     sample_tf - more efficient sampling for tensorflow
 
-    :param inputs:
-    :param coords:
-    :param dim:
-    :param wrapped:
+    :param inputs: the tensor to sample from
+    :param coords: the indices to sample with
+    :param dim: the dimensionality of the data
+    :param wrapped: whether to wrap out of bound indices or to clip them
     """
     import tensorflow as tf
     # form coords in a way so that we can gather_nd with them
@@ -212,7 +212,7 @@ def sample(inputs, coords, dim, wrapped):
     coords_shape = K.shape(coords)
     outputs_shape = K.concatenate([inputs_shape[0:1], coords_shape[2:], inputs_shape[-1:]])
 
-    maxes = K.cast(inputs_shape[1:-1] - 1, "float32")
+    maxes = K.cast(inputs_shape[1:-1] - 1, "int32")
     if wrapped:
         coords = wrap(coords, maxes, dim)
     else:
@@ -283,6 +283,7 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
     # (e.g. corresponding to the 4 points in 2D that surround the point to be interpolated,
     # or to the 8 points in 3D, etc ...)
     surround_coord_sets = []
+    surround_inputs = []
     for i in range(2 ** dim):
         bits = bitfield(i)
         bits = [0] * (dim - len(bits)) + bits
@@ -292,10 +293,8 @@ def interpolate_bilinear(coords, inputs, dim, wrap=False):
         surround_coord_set = coords + offsets
         surround_coord_sets.append(surround_coord_set)
 
-    # sample for each of the surrounding points before interpolating
-    surround_inputs = []
-    for coords_set in surround_coord_sets:
-        surround_input = sample(inputs, coords_set, dim, wrapped=wrap)
+        # sample for each of the surrounding points before interpolating
+        surround_input = sample(inputs, surround_coord_set, dim, wrapped=wrap)
         surround_inputs.append(surround_input)
 
     # Bilinear interpolation, this part of the kernel lets the gradients flow through the
@@ -402,6 +401,7 @@ def interpolate_gaussian(coords, inputs, dim, wrap=False, kernel_size=None, kern
     samples = sample(inputs, sampling_coords, dim=dim * 2, wrapped=True)
 
     # since the gaussians are isotropic, I have to reduce a product along the dim-dimension first
+    # TODO: this needs to be the meshgrid with image size, and not the scaled up coords
     coord_gaussian_pdfs = coord_gaussians.prob(extended_coords)
     coord_gaussian_pdfs = tf.reduce_prod(coord_gaussian_pdfs, axis=1)
 
