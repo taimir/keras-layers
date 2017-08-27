@@ -485,11 +485,15 @@ class SpatialTransform(Layer):
         if isinstance(self.loc_network, Layer) or isinstance(self.loc_network, Model):
             if hasattr(self, 'previous'):
                 self.loc_network.set_previous(self.previous)
-            self.loc_network.build()
+            self.loc_network.build(input_shape)
+
             self.trainable_weights = self.loc_network.trainable_weights
-            self.regularizers = self.loc_network.regularizers
-            self.constraints = self.loc_network.constraints
+            # add regularization losses
+            for loss in self.output_fn.losses:
+                self.add_loss(loss)
+
             self.input = self.loc_network.input
+
         super(SpatialTransform, self).build(input_shape)
 
     def call(self, x):
