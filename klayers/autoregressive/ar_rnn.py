@@ -324,6 +324,21 @@ class AutoregressiveGRU(recurrent.Recurrent):
         y = self.output_fn(h)
         return y, [h, y]
 
+    def compute_output_shape(self, input_shape):
+        if isinstance(input_shape, list):
+            input_shape = input_shape[0]
+
+        if self.return_sequences:
+            output_shape = (input_shape[0], input_shape[1], self.output_units)
+        else:
+            output_shape = (input_shape[0], self.output_units)
+
+        if self.return_state:
+            state_shape = [(input_shape[0], self.units), (input_shape[0], self.output_units)]
+            return [output_shape] + state_shape
+        else:
+            return output_shape
+
     def get_config(self):
         config = {'units': self.units,
                   'activation': activations.serialize(self.activation),
