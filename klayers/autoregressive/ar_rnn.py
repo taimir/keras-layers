@@ -77,6 +77,11 @@ class AutoregressiveGRU(recurrent.Recurrent):
         recurrent_dropout: Float between 0 and 1.
             Fraction of the units to drop for
             the linear transformation of the recurrent state.
+        stop_ar_gradient: whether to stop the gradient that would flow
+            through the outputs of each time step due to them being
+            used as input for the next time step. Gradients coming
+            from further import layers deeper in the network remain
+            untouched.
 
     # References
         - [On the Properties of Neural Machine Translation: Encoder-Decoder Approaches](https://arxiv.org/abs/1409.1259)
@@ -106,6 +111,7 @@ class AutoregressiveGRU(recurrent.Recurrent):
                  bias_constraint=None,
                  dropout=0.,
                  recurrent_dropout=0.,
+                 stop_ar_gradient=False,
                  **kwargs):
         super(AutoregressiveGRU, self).__init__(**kwargs)
 
@@ -134,6 +140,7 @@ class AutoregressiveGRU(recurrent.Recurrent):
 
         self.dropout = min(1., max(0., dropout))
         self.recurrent_dropout = min(1., max(0., recurrent_dropout))
+        self.stop_ar_gradient = stop_ar_gradient
         self.state_spec = engine.InputSpec(shape=(None, self.units))
 
     def get_initial_state(self, inputs):
@@ -269,6 +276,9 @@ class AutoregressiveGRU(recurrent.Recurrent):
     def step(self, inputs, states):
         h_tm1 = states[0]  # previous memory
         y_tm1 = states[1]  # previous output
+        if self.stop_ar_gradient:
+            y_tm1 = K.stop_gradient(y_tm1)
+
         dp_mask = states[2]  # dropout matrices for recurrent units
         rec_dp_mask = states[3]
 
